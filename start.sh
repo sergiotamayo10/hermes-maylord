@@ -79,4 +79,10 @@ rm -f /data/.hermes/gateway.pid /data/.hermes/gateway.lock /data/.hermes/gateway
 # Dashboard has no respawn supervisor every proxied page 503s until redeploy
 # while /setup and /health stay green. Setting it here would skip that pairing.
 
+# Seed the persona (SOUL.md), memory skeleton and starter skills. Existing files
+# are never overwritten, so the owner's edits survive redeploys. Non-fatal: a seed
+# problem must not stop the admin server from coming up.
+/opt/hermes/wrapper-venv/bin/python -E -s /app/template_helpers/seed_defaults.py \
+  --seed /app/seed --home /data/.hermes || echo "[seed-defaults] WARNING: seeding failed" >&2
+
 exec /opt/hermes/wrapper-venv/bin/python -E -s /app/server.py

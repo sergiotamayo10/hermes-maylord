@@ -64,6 +64,10 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 <!-- TODO: Add Telegram chat screenshot -->
 <!-- ![Telegram Example](docs/telegram-example.png) -->
 
+## Hardening for a personal agent
+
+See [docs/OPERATOR_SETUP.md](docs/OPERATOR_SETUP.md) for the Modal sandbox, allowlists, GitHub branch protection, per-client profiles and a staged rollout. Setup shows red notices while allow-all is on, the shell is unsandboxed, or the admin password is short.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -71,6 +75,7 @@ Message your Telegram bot. If you're a new user, a pairing request will appear i
 | `PORT` | `8080` | Web server port (set automatically by Railway) |
 | `ADMIN_USERNAME` | `admin` | Login username |
 | `ADMIN_PASSWORD` | *(auto-generated)* | Login password — if unset, a random password is printed to the deploy logs. Changing it redeploys the service, which signs everyone out. |
+| `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | *(unset)* | Run the agent's terminal in a Modal sandbox that receives only `GITHUB_TOKEN`. |
 | `HERMES_REF` | *(pinned in Dockerfile)* | Development override for the Hermes Agent git ref. For production upgrades, use the matching template release branch so version-specific compatibility changes ship with it — see [Updating Hermes](#updating-hermes). |
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.
@@ -114,7 +119,7 @@ One container runs a single public process that fronts two managed Hermes subpro
 ```
 Railway Container
 └── server.py — Starlette + Uvicorn on 0.0.0.0:$PORT   (the only public surface)
-    ├── /login, /logout    — cookie login (7-day, httponly)
+    ├── /login, /logout    — cookie login (1-day, httponly)
     ├── /health            — health check (no auth)
     ├── /setup             — this template's setup wizard
     ├── /setup/api/*       — config, status, logs, gateway, pairing, backup, OAuth

@@ -1151,6 +1151,10 @@
       <button class="btn sm" x-show="status.preparation?.requires_restore" @click="page='backup'">Open Backup &amp; Restore</button>
     </div>
 
+    <template x-for="(warning, i) in status.security_warnings || []" :key="'sec'+i">
+      <div class="hindsight-upgrade-notice" role="alert" style="margin:20px;" x-text="warning"></div>
+    </template>
+
     <template x-for="(warning, i) in status.preparation?.warnings || []" :key="i">
       <div class="hindsight-upgrade-notice" role="note" style="margin:20px;" x-text="warning"></div>
     </template>

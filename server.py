@@ -6,7 +6,7 @@ Responsibilities:
   - Management API at /setup/api/* (config, status, logs, gateway, pairing)
   - Reverse proxy at / and /* → native Hermes dashboard (hermes_cli/web_server, on 127.0.0.1:9119)
   - Managed subprocesses: `hermes gateway` (agent) and `hermes dashboard` (native UI)
-  - Cookie-based session auth at /login (HMAC-signed, 7-day expiry, httponly)
+  - Cookie-based session auth at /login (HMAC-signed, 1-day expiry, httponly)
 
 Auth model: Basic Auth was dropped in favor of cookies because the Hermes React
 SPA's plain fetch() calls do not reliably include basic-auth creds across browsers,
@@ -56,6 +56,7 @@ from starlette.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     Response,
 )
@@ -248,6 +249,9 @@ if not ADMIN_PASSWORD:
     print(f"[server] Admin credentials — username: {ADMIN_USERNAME}  password: {ADMIN_PASSWORD}", flush=True)
 else:
     print(f"[server] Admin username: {ADMIN_USERNAME}", flush=True)
+    if len(ADMIN_PASSWORD) < 16:
+        print("[server] WARNING: ADMIN_PASSWORD is shorter than 16 characters. The admin "
+              "Console is a shell on a public URL; use a long random password.", flush=True)
 
 # ── Env var registry ──────────────────────────────────────────────────────────
 # (key, label, category, is_secret)
@@ -333,6 +337,10 @@ ENV_VARS = [
     ("GITHUB_TOKEN",             "GitHub token",             "tool",      True),
     ("VOICE_TOOLS_OPENAI_KEY",   "OpenAI (voice/TTS)",       "tool",      True),
     ("HONCHO_API_KEY",           "Honcho (memory)",          "tool",      True),
+    # Modal sandbox for the agent's terminal (see _apply_security_defaults).
+    ("MODAL_TOKEN_ID",           "Modal token ID (sandbox)", "tool",      False),
+    ("MODAL_TOKEN_SECRET",       "Modal token secret",       "tool",      True),
+    ("CLICKUP_API_KEY",          "ClickUp API token",        "tool",      True),
     ("TELEGRAM_BOT_TOKEN",       "Bot Token",                "telegram",  True),
     ("TELEGRAM_ALLOWED_USERS",   "Allowed User IDs",         "telegram",  False),
     ("DISCORD_BOT_TOKEN",        "Bot Token",                "discord",   True),
@@ -340,6 +348,7 @@ ENV_VARS = [
     ("SLACK_BOT_TOKEN",          "Bot Token (xoxb-...)",     "slack",     True),
     ("SLACK_APP_TOKEN",          "App Token (xapp-...)",     "slack",     True),
     ("WHATSAPP_ENABLED",         "Enable WhatsApp",          "whatsapp",  False),
+    ("WHATSAPP_ALLOWED_USERS",   "Allowed numbers/groups",   "whatsapp",  False),
     ("EMAIL_ADDRESS",            "Email Address",            "email",     False),
     ("EMAIL_PASSWORD",           "Email Password",           "email",     True),
     ("EMAIL_IMAP_HOST",          "IMAP Host",                "email",     False),
@@ -599,6 +608,88 @@ def _restore_file_snapshot(path: Path, snapshot: tuple[bytes, int] | None) -> No
         Path(tmp_name).unlink(missing_ok=True)
 
 
+# ── Security defaults (sandbox, approvals, stranger handling) ────────────────
+# Without a sandbox the agent's shell runs as root beside /data/.hermes/.env, so
+# any prompt injection (email, chat, web page) can read every credential. When
+# Modal credentials are configured the terminal moves into a Modal container
+# that receives only the env names listed in terminal.env_passthrough.
+SANDBOX_ENV_PASSTHROUGH = ["GITHUB_TOKEN"]
+DEFAULT_APPROVAL_DENY = [
+    "git push --force*",
+    "git push -f*",
+    "git push * --delete *",
+    "gh repo delete*",
+    "rm -rf ~*",
+    "curl * | *sh",
+    "wget * | *sh",
+]
+# Per-platform allowlist variables whose first-class presence means the owner
+# has restricted who may talk to the agent.
+_OWNER_ALLOWLIST_KEYS = ("TELEGRAM_ALLOWED_USERS", "WHATSAPP_ALLOWED_USERS", "GATEWAY_ALLOWED_USERS")
+
+
+def _owner_ids(data: dict[str, str]) -> list[str]:
+    """Collect the comma-separated allowlist ids the owner configured."""
+    ids: list[str] = []
+    for key in _OWNER_ALLOWLIST_KEYS:
+        for part in str(data.get(key, "") or "").split(","):
+            part = part.strip()
+            if part and part != "*" and part not in ids:
+                ids.append(part)
+    return ids
+
+
+def _sandbox_configured(data: dict[str, str]) -> bool:
+    return bool(str(data.get("MODAL_TOKEN_ID", "")).strip() and str(data.get("MODAL_TOKEN_SECRET", "")).strip())
+
+
+def _apply_security_defaults(merged: dict, data: dict[str, str]) -> None:
+    """Terminal backend + approvals + stranger handling, preserving operator edits.
+
+    * Modal credentials present: move a never-customised ("local"/unset) backend
+      to ``modal``. A backend the operator chose in the Hermes dashboard (docker,
+      ssh, ...) is left alone.
+    * No sandbox: keep the previous behaviour (local, /tmp).
+    * ``approvals`` and ``unauthorized_dm_behavior`` are only seeded when absent,
+      so the owner can tune them afterwards.
+    """
+    terminal = dict(merged.get("terminal") if isinstance(merged.get("terminal"), dict) else {})
+    current_backend = str(terminal.get("backend") or "").strip().lower()
+    terminal["timeout"] = 60
+    if _sandbox_configured(data) and current_backend in ("", "local"):
+        terminal["backend"] = "modal"
+        terminal.setdefault("modal_image", "nousresearch/hermes-sandbox:desktop")
+        terminal.setdefault("container_persistent", True)
+        terminal.setdefault("container_cpu", 1)
+        terminal.setdefault("container_memory", 4096)
+        terminal.setdefault("env_passthrough", list(SANDBOX_ENV_PASSTHROUGH))
+        terminal.pop("cwd", None)  # /tmp is a host path; the sandbox has its own cwd
+    elif not current_backend or current_backend == "local":
+        terminal["backend"] = "local"
+        terminal["cwd"] = "/tmp"
+    merged["terminal"] = terminal
+
+    if "approvals" not in merged:
+        approvals: dict = {
+            "mode": "manual",
+            "timeout": 300,
+            "cron_mode": "deny",
+            "unattended_mode": "deny",
+            "single_query_mode": "deny",
+            "destructive_slash_confirm": True,
+            "deny": list(DEFAULT_APPROVAL_DENY),
+        }
+        owners = _owner_ids(data)
+        if owners:
+            approvals["approvers"] = owners
+        merged["approvals"] = approvals
+
+    # Ignore strangers instead of issuing pairing codes, but only once the owner
+    # has an explicit allowlist; otherwise pairing is the only way to get in.
+    if _owner_ids(data):
+        merged.setdefault("unauthorized_dm_behavior", "ignore")
+
+
 def write_config_yaml(data: dict[str, str], *, reset_model: bool = False, preserve_model: bool = False) -> None:
     """Write config.yaml — deep-merge template defaults with any existing user/cron-managed sections.
 
@@ -713,11 +804,7 @@ def write_config_yaml(data: dict[str, str], *, reset_model: bool = False, preser
                 merged_model.pop(_stale, None)
     merged["model"] = merged_model
 
-    merged_terminal = dict(merged.get("terminal") if isinstance(merged.get("terminal"), dict) else {})
-    merged_terminal["backend"] = "local"
-    merged_terminal["timeout"] = 60
-    merged_terminal["cwd"] = "/tmp"
-    merged["terminal"] = merged_terminal
+    _apply_security_defaults(merged, data)
 
     # This image has no browser runtime. Keep upstream's explicit opt-out as
     # the default; preserve a backend the operator configured in Hermes.
@@ -1564,11 +1651,54 @@ import hmac as _hmac
 from urllib.parse import quote as _url_quote, urlparse as _urlparse
 
 COOKIE_NAME = "hermes_auth"
-COOKIE_MAX_AGE = 7 * 86400  # 7 days
+COOKIE_MAX_AGE = 1 * 86400  # 1 day (shortened from 7: the admin Console is a shell)
 COOKIE_SECRET = secrets.token_bytes(32)
 
 # Public paths — no auth required. Everything else is behind the cookie gate.
 PUBLIC_PATHS = {"/health", "/setup/login", "/logout"}
+
+
+# ── Login brute-force limiter (in-memory, per client IP) ─────────────────────
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
+_LOGIN_FAILURES: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """Client address as seen by the trusted edge proxy.
+
+    Railway appends the real peer to X-Forwarded-For, so the right-most entry is
+    the one our proxy wrote; anything to its left is client-controlled and must
+    not be trusted for rate limiting.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+    if parts:
+        return parts[-1]
+    return request.client.host if request.client else "unknown"
+
+
+def _login_blocked(ip: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    recent = [t for t in _LOGIN_FAILURES.get(ip, []) if now - t < LOGIN_WINDOW_SECONDS]
+    if recent:
+        _LOGIN_FAILURES[ip] = recent
+    else:
+        _LOGIN_FAILURES.pop(ip, None)
+    return len(recent) >= LOGIN_MAX_FAILURES
+
+
+def _record_login_failure(ip: str, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    _LOGIN_FAILURES.setdefault(ip, []).append(now)
+    if len(_LOGIN_FAILURES) > 1024:  # bound memory under a distributed attack
+        for key in [k for k, v in _LOGIN_FAILURES.items() if not v or now - v[-1] >= LOGIN_WINDOW_SECONDS]:
+            _LOGIN_FAILURES.pop(key, None)
+
+
+def _request_is_https(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    return proto == "https" or request.url.scheme == "https"
 
 
 def _make_auth_token() -> str:
@@ -1703,6 +1833,13 @@ async def page_login(request: Request) -> Response:
 
 async def login_post(request: Request) -> Response:
     """POST /setup/login — validate creds and set the auth cookie."""
+    ip = _client_ip(request)
+    if _login_blocked(ip):
+        return PlainTextResponse(
+            "Too many failed login attempts. Try again in 15 minutes.",
+            status_code=429,
+            headers={"Retry-After": str(LOGIN_WINDOW_SECONDS)},
+        )
     form = await request.form()
     username = str(form.get("username", ""))
     password = str(form.get("password", ""))
@@ -1711,16 +1848,19 @@ async def login_post(request: Request) -> Response:
     valid_user = _hmac.compare_digest(username, ADMIN_USERNAME)
     valid_pw = _hmac.compare_digest(password, ADMIN_PASSWORD)
     if valid_user and valid_pw:
+        _LOGIN_FAILURES.pop(ip, None)
         resp = RedirectResponse(return_to, status_code=302)
         resp.set_cookie(
             COOKIE_NAME,
             _make_auth_token(),
             max_age=COOKIE_MAX_AGE,
             httponly=True,
+            secure=_request_is_https(request),
             samesite="lax",
             path="/",
         )
         return resp
+    _record_login_failure(ip)
     return RedirectResponse(f"/setup/login?returnTo={_url_quote(return_to)}&error=1", status_code=302)
 
 
@@ -2959,9 +3099,37 @@ def _email_authserv_missing() -> list[str]:
     return profiles
 
 
+def _security_warnings(data: dict[str, str], config: dict) -> list[str]:
+    """Plain-language findings about risky settings, shown on the Setup page."""
+    warnings: list[str] = []
+    if str(data.get("GATEWAY_ALLOW_ALL_USERS", "")).strip().lower() in ("1", "true", "yes", "on"):
+        warnings.append(
+            "Security: 'Allow all users' is on, so anyone who finds your bot can use your "
+            "agent and its tools. Turn it off and list your own ids in the Allowed User IDs fields."
+        )
+    terminal = config.get("terminal") if isinstance(config.get("terminal"), dict) else {}
+    backend = str(terminal.get("backend") or "local").strip().lower()
+    if backend == "local":
+        warnings.append(
+            "Security: the agent's shell runs inside this container next to your API keys, so a "
+            "malicious email or message could make it read them. Add Modal credentials "
+            "(MODAL_TOKEN_ID / MODAL_TOKEN_SECRET) to run commands in an isolated sandbox."
+        )
+    if len(ADMIN_PASSWORD) < 16:
+        warnings.append(
+            "Security: ADMIN_PASSWORD is shorter than 16 characters. The admin Console is a shell "
+            "on a public URL; set a long random password in the Railway variables."
+        )
+    return warnings
+
+
 async def api_status(request: Request):
     if err := guard(request): return err
     data = read_env(ENV_FILE)
+    try:
+        _security_config = _read_config_for_write(Path(HERMES_HOME) / "config.yaml")
+    except ValueError:
+        _security_config = {}
     # Label from the ENV_VARS registry rather than munging the env-var name.
     # Deriving it produced things like "Minimax Cn" and "Glm" while the registry
     # already carries the proper display name; a new provider now reads correctly
@@ -2980,6 +3148,7 @@ async def api_status(request: Request):
                          "channels": channels, "hermes_version": HERMES_VERSION,
                          "storage": storage,
                          "preparation": preparation,
+                         "security_warnings": _security_warnings(data, _security_config),
                          "hindsight_configured": _hindsight_configured(),
                          "email_authserv_missing": _email_authserv_missing(),
                          # None when running; a dict (possibly with null fields)

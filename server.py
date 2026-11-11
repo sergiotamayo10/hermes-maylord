@@ -614,6 +614,7 @@ def _restore_file_snapshot(path: Path, snapshot: tuple[bytes, int] | None) -> No
 # Modal credentials are configured the terminal moves into a Modal container
 # that receives only the env names listed in terminal.env_passthrough.
 SANDBOX_ENV_PASSTHROUGH = ["GITHUB_TOKEN"]
+AUDIT_PLUGIN_NAME = "outbound-audit"
 DEFAULT_APPROVAL_DENY = [
     "git push --force*",
     "git push -f*",
@@ -683,6 +684,15 @@ def _apply_security_defaults(merged: dict, data: dict[str, str]) -> None:
         if owners:
             approvals["approvers"] = owners
         merged["approvals"] = approvals
+
+    # Plugins are opt-in. Add the seeded audit plugin without disturbing any
+    # plugin the operator already enabled.
+    plugins = dict(merged.get("plugins") if isinstance(merged.get("plugins"), dict) else {})
+    enabled = list(plugins.get("enabled") if isinstance(plugins.get("enabled"), list) else [])
+    if AUDIT_PLUGIN_NAME not in enabled:
+        enabled.append(AUDIT_PLUGIN_NAME)
+    plugins["enabled"] = enabled
+    merged["plugins"] = plugins
 
     # Ignore strangers instead of issuing pairing codes, but only once the owner
     # has an explicit allowlist; otherwise pairing is the only way to get in.
@@ -3158,6 +3168,44 @@ async def api_status(request: Request):
                          "paused": estop_state()})
 
 
+def _read_audit_tail(home: Path, limit: int = 20) -> list[dict]:
+    """Newest outbound-audit records across the default home and named profiles."""
+    paths = [home / "logs" / "outbound.jsonl"]
+    profiles = home / "profiles"
+    try:
+        paths += sorted(profiles.glob("*/logs/outbound.jsonl"))
+    except OSError:
+        pass
+    records: list[dict] = []
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 256 * 1024))
+                lines = stream.read().decode("utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines[-limit:]:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict):
+                if path.parent.parent != home:
+                    item["profile"] = path.parent.parent.name
+                records.append(item)
+    records.sort(key=lambda r: str(r.get("ts", "")), reverse=True)
+    return records[:limit]
+
+
+async def api_audit(request: Request):
+    if err := guard(request): return err
+    return JSONResponse({"entries": _read_audit_tail(Path(HERMES_HOME))})
+
+
 async def api_estop_resume(request: Request):
     """Clear the pause sentinel — the "Resume" control in the admin panel.
 
@@ -5285,6 +5333,7 @@ routes = [
     Route("/setup/api/config",                  api_config_get,      methods=["GET"]),
     Route("/setup/api/config",                  api_config_put,      methods=["PUT"]),
     Route("/setup/api/status",                  api_status),
+    Route("/setup/api/audit",                   api_audit),
     Route("/setup/api/preparation/retry",       api_preparation_retry, methods=["POST"]),
     Route("/setup/api/dependencies/apply",      api_dependencies_apply, methods=["POST"]),
     Route("/setup/api/logs",                    api_logs),

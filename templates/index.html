@@ -1610,6 +1610,23 @@
       </div>
       <div class="panel-body">
 
+        <!-- Recent outbound activity: what the agent sent, posted, merged or pushed.
+             Values go through x-text (escaped), so logged chat text cannot inject HTML. -->
+        <div style="margin-bottom:18px;">
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px;">Recent outbound activity</div>
+          <div x-show="!audit.length" style="color:var(--text-dim);font-size:12px;">
+            Nothing recorded yet. Sends, comments, merges, pushes and replies to other people appear here.
+          </div>
+          <template x-for="(e, i) in audit" :key="i">
+            <div style="display:flex;gap:10px;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border, rgba(128,128,128,.2));">
+              <span style="color:var(--text-dim);white-space:nowrap;" x-text="(e.ts||'').replace('T',' ').slice(0,16)"></span>
+              <span style="white-space:nowrap;font-weight:600;" x-text="e.kind==='reply' ? ('reply · '+(e.platform||'')) : (e.tool||'tool')"></span>
+              <span style="flex:1;min-width:0;overflow-wrap:anywhere;" x-text="(e.profile ? '['+e.profile+'] ' : '') + (e.kind==='reply' ? (e.text||'') : (e.args||''))"></span>
+              <span x-show="e.kind!=='reply'" style="color:var(--text-dim);" x-text="e.status"></span>
+            </div>
+          </template>
+        </div>
+
         <!-- Paused (hermes ESTOP). The gateway keeps reporting "running" and
              /health keeps returning 200 while every message is refused, so this
              banner is the only place the state is visible. It survives a
@@ -2485,6 +2502,7 @@ function app() {
     vars: {},
     gw: {},
     status: {},
+    audit: [],
     // null while the bot is accepting work; {reason, engaged_at} when hermes'
     // ESTOP sentinel is engaged. Kept as its own field (not read off `status`)
     // so the header can show it before the Status panel is ever opened.
@@ -2890,11 +2908,12 @@ function app() {
       // preparation. Status loads settings when Hermes becomes ready.
       setInterval(() => this.loadStatus(),  5000);
       setInterval(() => this.loadLogs(),    3000);
+      setInterval(() => { if (this.page === 'status') this.loadAudit(); }, 10000);
       setInterval(() => this.loadPairing(), 5000);
       setInterval(() => {
         if (this.page === 'backup' || this.backupJobs.some(j => j.status === 'running')) this.loadBackupJobs();
       }, 3000);
-      await Promise.all([this.loadStatus(), this.loadLogs(), this.loadPairing(), this.loadSnapshots(), this.loadBackupJobs()]);
+      await Promise.all([this.loadStatus(), this.loadLogs(), this.loadPairing(), this.loadSnapshots(), this.loadBackupJobs(), this.loadAudit()]);
     },
 
     async loadConfig() {
@@ -2998,6 +3017,13 @@ function app() {
           if (d.hermes_version) this.hermesVersion = d.hermes_version;
           if (d.preparation?.state === 'ready' && this.configNeedsLoad) await this.loadConfig();
         }
+      } catch {}
+    },
+
+    async loadAudit() {
+      try {
+        const r = await fetch('/setup/api/audit');
+        if (r.ok) this.audit = (await r.json()).entries || [];
       } catch {}
     },
 

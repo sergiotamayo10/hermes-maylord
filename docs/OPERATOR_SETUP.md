@@ -73,6 +73,39 @@ client meetings.
 3. Week 3 teammate auto-replies; read the outbound log daily.
 4. Week 4 GitHub write via branches and PRs.
 
+## 11. Outbound audit log
+Two seeded observers write `/data/.hermes/logs/outbound.jsonl` (private, rotated at 5 MB,
+secrets redacted, tool results never stored):
+- plugin `outbound-audit` (enabled automatically in `plugins.enabled`) records outbound tool
+  calls: send/reply/post/comment/merge/push/delete tools, ClickUp/Gmail/GitHub MCP writes,
+  and terminal `git push`, `gh pr|issue|release`, state-changing `curl`, `mail`.
+- gateway hook `outbound-audit` records replies to chats (first 200 characters). Replies in
+  your own DM are skipped.
+
+Setup -> Status shows the 20 most recent entries. It is an observer: it cannot block anything,
+and classification is by tool name, so a tool with an unusual name may go unrecorded. Review the
+list during week 3 and tell me which tools to add.
+
+Not verified against a live deployment: whether the plugin also fires for named client
+profiles under a multiplexed gateway (the hook writes to the default profile's log either way).
+It only pings you through the Status page, not Telegram.
+
+## 12. Skill evals
+Golden sets live in `/data/.hermes/evals/` (quotation arithmetic, client-reply injection and
+leak cases, meeting-notes, and disabled `my-voice` templates). From the dashboard Console:
+
+    /opt/hermes/wrapper-venv/bin/python /app/template_helpers/run_skill_evals.py --dry-run
+    /opt/hermes/wrapper-venv/bin/python /app/template_helpers/run_skill_evals.py --report /data/before.json
+    # edit a skill, then:
+    /opt/hermes/wrapper-venv/bin/python /app/template_helpers/run_skill_evals.py --baseline /data/before.json
+
+It exits 1 if any skill's pass rate drops. Each case is one real model call through
+`hermes -z` with only the side-effect-free `todo` toolset, so nothing is sent or written; it
+still costs tokens (the report shows cost). Run it before accepting a Friday `my-voice` update.
+Checks are deterministic text checks (numbers, forbidden strings, required format), not a tone
+judge. The sets are starters (17 cases); extend them with your real situations and write the
+`my-voice` checks from your own rules.
+
 ## Limits to remember
 Hard controls: sandbox, allowlist, branch protection, login limit. Soft controls
 (rely on the model following `SOUL.md`): client approval, teammate scope, never

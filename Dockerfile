@@ -100,6 +100,7 @@ RUN mkdir -p /data/.hermes
 COPY server.py /app/server.py
 COPY template_helpers/ /app/template_helpers/
 COPY templates/ /app/templates/
+COPY seed/ /app/seed/
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 

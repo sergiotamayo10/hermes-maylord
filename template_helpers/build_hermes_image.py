@@ -15,7 +15,7 @@ PAYLOAD = Path("/opt/hermes")
 SOURCE = PAYLOAD / "repo"
 ENVIRONMENT = PAYLOAD / "venv"
 WRAPPER = PAYLOAD / "wrapper-venv"
-EXTRAS = ("all", "messaging", "tts-premium", "bedrock", "anthropic", "edge-tts", "vision")
+EXTRAS = ("all", "messaging", "tts-premium", "bedrock", "anthropic", "edge-tts", "vision", "modal")
 
 
 def run(*args: str | Path, **kwargs) -> None:

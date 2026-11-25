@@ -23,12 +23,21 @@ What it cannot do for you is below. Do these once.
 ## 3. Sandbox
 - Create a Modal account, set `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` in Setup, and
   set a monthly spend limit in the Modal dashboard.
-- The sandbox receives only `GITHUB_TOKEN`. Verify after saving: ask the agent to
-  run `cat /data/.hermes/.env`. It must fail inside the sandbox.
+- The only secret the sandbox receives is `GITHUB_TOKEN`. Hermes' Modal backend does not
+  forward env vars, so the token arrives as the file `/root/.hermes/sandbox-creds/gh_token`
+  (via `terminal.credential_files`). Every Setup save refreshes it, so a rotated token takes
+  effect without manual steps. In the sandbox:
+  `export GH_TOKEN=$(cat /root/.hermes/sandbox-creds/gh_token)` and
+  `gh auth setup-git`.
+- Verify after saving: ask the agent to run `cat /data/.hermes/.env`. It must fail
+  inside the sandbox.
 
 ## 4. GitHub (full write, guarded)
 - Fine-grained token, selected repositories only, Contents / Pull requests /
   Issues / Actions read+write, no admin or organisation scopes, 90-day expiry.
+- Fine-grained tokens cannot get the Checks permission, so `gh pr checks` always
+  returns 403. To check CI, read the GraphQL `statusCheckRollup { state }` field of the
+  pull request (`gh api graphql`), or run `gh run list --commit <sha>`.
 - On every repo protect `main`: require a pull request and passing CI, block force
   pushes and deletion, enable secret scanning + push protection. This is the real
   guard; approval prompts are skipped inside container backends.

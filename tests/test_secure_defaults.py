@@ -38,15 +38,53 @@ class SandboxAndApprovalTests(ConfigSafetyFixture, unittest.TestCase):
         self.server.write_config_yaml({"LLM_MODEL": "m", **MODAL})
         terminal = self._config()["terminal"]
         self.assertEqual(terminal["backend"], "modal")
-        self.assertEqual(terminal["env_passthrough"], ["GITHUB_TOKEN"])
+        self.assertNotIn("env_passthrough", terminal)
+        self.assertNotIn("credential_files", terminal)  # no GITHUB_TOKEN set
         self.assertNotIn("cwd", terminal)
 
+    def test_github_token_reaches_modal_sandbox_as_credential_file(self):
+        self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_one", **MODAL})
+        terminal = self._config()["terminal"]
+        self.assertEqual(terminal["credential_files"], ["sandbox-creds/gh_token"])
+        self.assertNotIn("env_passthrough", terminal)
+        token_file = self.home / "sandbox-creds" / "gh_token"
+        self.assertEqual(token_file.read_text(encoding="utf-8"), "ghp_one")
+        self.assertEqual(token_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(token_file.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_rotated_github_token_is_rewritten(self):
+        self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_one", **MODAL})
+        self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_two", **MODAL})
+        token_file = self.home / "sandbox-creds" / "gh_token"
+        self.assertEqual(token_file.read_text(encoding="utf-8"), "ghp_two")
+        self.assertEqual(self._config()["terminal"]["credential_files"], ["sandbox-creds/gh_token"])
+
+    def test_cleared_github_token_is_removed_but_operator_files_kept(self):
+        (self.home / "config.yaml").write_text(yaml.safe_dump({"terminal": {
+            "backend": "modal", "credential_files": ["sandbox-bin/setup.sh", "sandbox-creds/gh_token"],
+        }}), encoding="utf-8")
+        self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_one", **MODAL})
+        self.assertTrue((self.home / "sandbox-creds" / "gh_token").exists())
+        self.server.write_config_yaml({"LLM_MODEL": "m", **MODAL})
+        self.assertEqual(self._config()["terminal"]["credential_files"], ["sandbox-bin/setup.sh"])
+        self.assertFalse((self.home / "sandbox-creds" / "gh_token").exists())
+
+    def test_legacy_env_passthrough_is_dropped_custom_one_kept(self):
+        for seeded, expected in ((["GITHUB_TOKEN"], None), (["MY_VAR"], ["MY_VAR"])):
+            (self.home / "config.yaml").write_text(
+                yaml.safe_dump({"terminal": {"backend": "modal", "env_passthrough": seeded}}), encoding="utf-8"
+            )
+            self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_one", **MODAL})
+            self.assertEqual(self._config()["terminal"].get("env_passthrough"), expected)
+
     def test_without_modal_credentials_backend_stays_local(self):
-        self.server.write_config_yaml({"LLM_MODEL": "m"})
+        self.server.write_config_yaml({"LLM_MODEL": "m", "GITHUB_TOKEN": "ghp_one"})
         terminal = self._config()["terminal"]
         self.assertEqual(terminal["backend"], "local")
         self.assertEqual(terminal["cwd"], "/tmp")
         self.assertNotIn("env_passthrough", terminal)
+        self.assertNotIn("credential_files", terminal)
+        self.assertFalse((self.home / "sandbox-creds" / "gh_token").exists())
 
     def test_one_modal_value_alone_is_not_enough(self):
         self.server.write_config_yaml({"LLM_MODEL": "m", "MODAL_TOKEN_ID": "ak-test"})

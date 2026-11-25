@@ -75,7 +75,7 @@ See [docs/OPERATOR_SETUP.md](docs/OPERATOR_SETUP.md) for the Modal sandbox, allo
 | `PORT` | `8080` | Web server port (set automatically by Railway) |
 | `ADMIN_USERNAME` | `admin` | Login username |
 | `ADMIN_PASSWORD` | *(auto-generated)* | Login password — if unset, a random password is printed to the deploy logs. Changing it redeploys the service, which signs everyone out. |
-| `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | *(unset)* | Run the agent's terminal in a Modal sandbox that receives only `GITHUB_TOKEN`. |
+| `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | *(unset)* | Run the agent's terminal in a Modal sandbox. The only secret it receives is `GITHUB_TOKEN`, as the file `/root/.hermes/sandbox-creds/gh_token`. Modal does not forward env vars. |
 | `HERMES_REF` | *(pinned in Dockerfile)* | Development override for the Hermes Agent git ref. For production upgrades, use the matching template release branch so version-specific compatibility changes ship with it — see [Updating Hermes](#updating-hermes). |
 
 All other configuration (LLM provider, model, channels, tools) is managed through the admin dashboard.

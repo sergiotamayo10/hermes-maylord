@@ -611,9 +611,15 @@ def _restore_file_snapshot(path: Path, snapshot: tuple[bytes, int] | None) -> No
 # ── Security defaults (sandbox, approvals, stranger handling) ────────────────
 # Without a sandbox the agent's shell runs as root beside /data/.hermes/.env, so
 # any prompt injection (email, chat, web page) can read every credential. When
-# Modal credentials are configured the terminal moves into a Modal container
-# that receives only the env names listed in terminal.env_passthrough.
-SANDBOX_ENV_PASSTHROUGH = ["GITHUB_TOKEN"]
+# Modal credentials are configured the terminal moves into a Modal container.
+# Hermes' Modal backend never forwards env vars (only docker/ssh honour
+# terminal.env_passthrough, and GITHUB_TOKEN/GH_TOKEN are blocklisted there
+# anyway), so GITHUB_TOKEN reaches the sandbox as a file instead: it is written
+# to $HERMES_HOME/sandbox-creds/gh_token (0600) and listed in
+# terminal.credential_files, which Hermes syncs to /root/.hermes/ in the sandbox.
+SANDBOX_GH_TOKEN_FILE = "sandbox-creds/gh_token"
+# The value earlier versions of this template seeded; it never had any effect.
+_LEGACY_ENV_PASSTHROUGH = ["GITHUB_TOKEN"]
 AUDIT_PLUGIN_NAME = "outbound-audit"
 DEFAULT_APPROVAL_DENY = [
     "git push --force*",
@@ -663,11 +669,24 @@ def _apply_security_defaults(merged: dict, data: dict[str, str]) -> None:
         terminal.setdefault("container_persistent", True)
         terminal.setdefault("container_cpu", 1)
         terminal.setdefault("container_memory", 4096)
-        terminal.setdefault("env_passthrough", list(SANDBOX_ENV_PASSTHROUGH))
         terminal.pop("cwd", None)  # /tmp is a host path; the sandbox has its own cwd
     elif not current_backend or current_backend == "local":
         terminal["backend"] = "local"
         terminal["cwd"] = "/tmp"
+    if terminal.get("backend") == "modal":
+        if terminal.get("env_passthrough") == _LEGACY_ENV_PASSTHROUGH:
+            terminal.pop("env_passthrough")
+        files = terminal.get("credential_files")
+        files = list(files) if isinstance(files, list) else []
+        has_token = bool(str(data.get("GITHUB_TOKEN", "")).strip())
+        if has_token and SANDBOX_GH_TOKEN_FILE not in files:
+            files.append(SANDBOX_GH_TOKEN_FILE)
+        elif not has_token:
+            files = [f for f in files if f != SANDBOX_GH_TOKEN_FILE]
+        if files:
+            terminal["credential_files"] = files
+        else:
+            terminal.pop("credential_files", None)
     merged["terminal"] = terminal
 
     if "approvals" not in merged:
@@ -895,6 +914,28 @@ def write_config_yaml(data: dict[str, str], *, reset_model: bool = False, preser
         merged.pop("custom_providers", None)
 
     _write_config_atomic(config_path, merged)
+    _sync_sandbox_credentials(merged, data)
+
+
+def _sync_sandbox_credentials(merged: dict, data: dict[str, str]) -> None:
+    """Keep $HERMES_HOME/sandbox-creds/gh_token in step with GITHUB_TOKEN.
+
+    Checked on every save and rewritten only when the token changed, so a rotated token
+    reaches the sandbox without needless re-uploads. Removed
+    when the token is cleared or the file is no longer listed in credential_files.
+    Inside the sandbox it lands at /root/.hermes/sandbox-creds/gh_token.
+    """
+    path = Path(HERMES_HOME) / SANDBOX_GH_TOKEN_FILE
+    terminal = merged.get("terminal") if isinstance(merged.get("terminal"), dict) else {}
+    files = terminal.get("credential_files") if isinstance(terminal.get("credential_files"), list) else []
+    token = str(data.get("GITHUB_TOKEN", "")).strip()
+    if token and SANDBOX_GH_TOKEN_FILE in files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        if not path.exists() or path.read_text(encoding="utf-8") != token:
+            _atomic_write_text(path, token)
+    else:
+        path.unlink(missing_ok=True)
 
 
 # ── Hermes dashboard auth (so MCP OAuth redirects resolve to the real host) ──

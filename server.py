@@ -662,7 +662,10 @@ def _apply_security_defaults(merged: dict, data: dict[str, str]) -> None:
     """
     terminal = dict(merged.get("terminal") if isinstance(merged.get("terminal"), dict) else {})
     current_backend = str(terminal.get("backend") or "").strip().lower()
-    terminal["timeout"] = 60
+    # Default only: an operator-raised limit must survive restarts and Setup saves. On Modal a
+    # command that outlives this limit is stopped by terminating the whole sandbox (uncommitted
+    # work is lost), so long test runs need a higher value.
+    terminal.setdefault("timeout", 60)
     if _sandbox_configured(data) and current_backend in ("", "local"):
         terminal["backend"] = "modal"
         terminal.setdefault("modal_image", "nousresearch/hermes-sandbox:desktop")

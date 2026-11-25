@@ -86,6 +86,15 @@ class SandboxAndApprovalTests(ConfigSafetyFixture, unittest.TestCase):
         self.assertNotIn("credential_files", terminal)
         self.assertFalse((self.home / "sandbox-creds" / "gh_token").exists())
 
+    def test_operator_terminal_timeout_is_preserved(self):
+        self.server.write_config_yaml({"LLM_MODEL": "m", **MODAL})
+        self.assertEqual(self._config()["terminal"]["timeout"], 60)
+        config = self._config()
+        config["terminal"]["timeout"] = 600
+        (self.home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        self.server.write_config_yaml({"LLM_MODEL": "m", **MODAL})
+        self.assertEqual(self._config()["terminal"]["timeout"], 600)
+
     def test_one_modal_value_alone_is_not_enough(self):
         self.server.write_config_yaml({"LLM_MODEL": "m", "MODAL_TOKEN_ID": "ak-test"})
         self.assertEqual(self._config()["terminal"]["backend"], "local")

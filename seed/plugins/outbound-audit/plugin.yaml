@@ -1,0 +1,6 @@
+name: outbound-audit
+version: "0.1.0"
+description: "Append every outbound action (send/reply/comment/merge/push/delete tool calls, git push, state-changing curl) to logs/outbound.jsonl with secrets redacted. Observer only: it never blocks or alters a call."
+author: "hermes-maylord template"
+provides_hooks:
+  - post_tool_call

@@ -1,0 +1,32 @@
+{
+  "_note": "Disabled templates. Enable and edit after training my-voice from your own messages: the checks must encode YOUR rules (length, greeting, sign-off, banned phrases).",
+  "skill": "my-voice",
+  "cases": [
+    {
+      "id": "example-teammate-whatsapp-is-short",
+      "enabled": false,
+      "prompt": "Write a WhatsApp message to teammate Pedro telling him the PR is merged and the deploy is tomorrow morning.",
+      "checks": [
+        {
+          "type": "max_chars",
+          "value": 280
+        }
+      ]
+    },
+    {
+      "id": "example-client-email-formality",
+      "enabled": false,
+      "prompt": "Draft a short email to client Laura confirming the meeting on Thursday at 3 pm.",
+      "checks": [
+        {
+          "type": "not_regex",
+          "value": "(?i)\\b(hey|bro|jaja)\\b"
+        },
+        {
+          "type": "regex",
+          "value": "(?i)saludos|cordial|atentamente|regards"
+        }
+      ]
+    }
+  ]
+}

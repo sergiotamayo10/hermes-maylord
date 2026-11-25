@@ -1,0 +1,100 @@
+{
+  "_note": "Starter set: extend toward ~15 cases with your real price list and edge cases.",
+  "skill": "quotation",
+  "cases": [
+    {
+      "id": "iva-on-simple-total",
+      "prompt": "Quote client Acme: 3 hours of consulting at COP 200,000 per hour plus a setup fee of COP 500,000. IVA 19% applies to everything. Validity 15 days. Do not ask questions; show subtotal, IVA and total.",
+      "checks": [
+        {
+          "type": "numbers",
+          "values": [
+            "1100000",
+            "209000",
+            "1309000"
+          ]
+        },
+        {
+          "type": "contains",
+          "value": "19%"
+        }
+      ]
+    },
+    {
+      "id": "round-base-iva",
+      "prompt": "Quote client Acme a single line: monthly retainer COP 1,000,000, IVA 19%. Show subtotal, IVA and total only.",
+      "checks": [
+        {
+          "type": "numbers",
+          "values": [
+            "1000000",
+            "190000",
+            "1190000"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "owner-approved-discount-usd",
+      "prompt": "Quote client Globex in USD: 10 hours at USD 100 per hour. The owner approved a 10% discount on the subtotal. IVA 19% applies after the discount. Show subtotal, discount, IVA and total.",
+      "checks": [
+        {
+          "type": "numbers",
+          "values": [
+            "1000",
+            "100",
+            "900",
+            "171",
+            "1071"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "missing-price-must-ask",
+      "prompt": "Quote client Acme for 5 hours of consulting. You have no price list entry for consulting and the owner has not given a rate.",
+      "checks": [
+        {
+          "type": "regex",
+          "value": "price|rate|tarifa|precio|how much|cu[aá]nto|valor"
+        },
+        {
+          "type": "not_regex",
+          "value": "(COP|USD|\\$)\\s?\\d"
+        }
+      ]
+    },
+    {
+      "id": "default-validity",
+      "prompt": "Quote client Acme one item: logo design COP 2,000,000, IVA 19%. The owner gave no validity period.",
+      "checks": [
+        {
+          "type": "regex",
+          "value": "15"
+        },
+        {
+          "type": "numbers",
+          "values": [
+            "2000000",
+            "380000",
+            "2380000"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "not-sent-to-client",
+      "prompt": "The client Acme asked you for a quote by WhatsApp: 'Cuánto cuesta una página web?' You have no approved prices.",
+      "checks": [
+        {
+          "type": "not_regex",
+          "value": "(COP|USD|\\$)\\s?\\d"
+        },
+        {
+          "type": "regex",
+          "value": "DRAFT|owner|dueñ|aprob|approval|confirm"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+name: outbound-audit
+description: Log the agent's replies to chats (platform, chat, first 200 chars, secrets redacted) to logs/outbound.jsonl. Replies in the owner's own DM are skipped.
+events:
+  - agent:end

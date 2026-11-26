@@ -1,0 +1,96 @@
+diff --git a/tools/environments/modal.py b/tools/environments/modal.py
+index e2d1ef97..40b19d51 100644
+--- a/tools/environments/modal.py
++++ b/tools/environments/modal.py
+@@ -7,7 +7,9 @@ import io
+ import logging
+ import shlex
+ import tarfile
++import os
+ import threading
++import time
+ from pathlib import Path
+ from typing import Any, Optional
+ 
+@@ -20,6 +22,19 @@ from tools.environments.remote_common import bash_argv, ensure_lazy_dep
+ 
+ logger = logging.getLogger(__name__)
+ 
++def _sandbox_lifetime() -> int:
++    """Hard cap on one sandbox's life (Modal kills it at this age, unsaved work included).
++    Idle sandboxes are still snapshotted and stopped by the idle reaper long before this."""
++    try:
++        value = int(os.environ.get("TERMINAL_MODAL_SANDBOX_LIFETIME", "21600"))
++    except ValueError:
++        value = 21600
++    return max(300, min(value, 86400))  # Modal allows at most 24h
++
++
++_LIVENESS_INTERVAL_S = 5.0
++
++
+ def _snapshot_store() -> Path:
+     # Resolved per call: the multiplexed gateway serves every profile from one process, so an
+     # import-time path would keep every profile's snapshots in the launch profile's home.
+@@ -159,9 +174,12 @@ class ModalEnvironment(BaseEnvironment):
+                 create_kwargs = dict(modal_sandbox_kwargs or {})
+                 sandbox = await _modal.Sandbox.create.aio(
+                     "sleep", "infinity", image=image_spec, app=app,
+-                    timeout=int(create_kwargs.pop("timeout", 3600)), **create_kwargs)
++                    timeout=int(create_kwargs.pop("timeout", _sandbox_lifetime())), **create_kwargs)
+                 return app, sandbox
+             self._app, self._sandbox = self._worker.run_coroutine(_create_sandbox(), timeout=300)
++        self._create_fn, self._base_image = _create, image
++        self._revive_lock = threading.Lock()
++        self._last_alive_check = time.monotonic()
+         try:
+             try:
+                 _create(_resolve_modal_image(restored_snapshot_id or image))
+@@ -229,7 +247,47 @@ class ModalEnvironment(BaseEnvironment):
+     def _modal_delete(self, remote_paths: list[str]) -> None:
+         self._exec(quoted_rm_command(remote_paths), timeout=15)
+ 
++    def _sandbox_alive(self) -> bool:
++        async def _poll():
++            return await self._sandbox.poll.aio()
++        try:
++            return self._worker.run_coroutine(_poll(), timeout=15) is None
++        except Exception as exc:
++            if "not found" in str(exc).lower() or type(exc).__name__ == "NotFoundError":
++                return False
++            logger.debug("Modal: liveness poll failed, assuming alive: %s", exc)
++            return True
++
++    def _revive_if_dead(self) -> None:
++        """Modal ends a sandbox at its lifetime cap (or after a cancel); without this every later
++        command in the session fails with empty output against the dead container."""
++        if time.monotonic() - self._last_alive_check < _LIVENESS_INTERVAL_S:
++            return
++        with self._revive_lock:
++            if time.monotonic() - self._last_alive_check < _LIVENESS_INTERVAL_S:
++                return
++            if not self._sandbox_alive():
++                logger.warning("Modal: sandbox for task %s has shut down; starting a new one", self._task_id)
++                snapshot_id, _ = (_get_snapshot_restore_candidate(self._task_id)
++                                  if self._persistent else (None, False))
++                try:
++                    self._create_fn(_resolve_modal_image(snapshot_id or self._base_image))
++                except Exception as exc:
++                    if not snapshot_id:
++                        raise
++                    logger.warning("Modal: restore from %s failed, using base image: %s", snapshot_id[:20], exc)
++                    self._create_fn(_resolve_modal_image(self._base_image))
++                logger.info("Modal: sandbox recreated (task=%s)", self._task_id)
++                self._sync_manager = FileSyncManager(
++                    get_files_fn=lambda: iter_sync_files("/root/.hermes"),
++                    upload_fn=self._modal_upload, delete_fn=self._modal_delete,
++                    bulk_upload_fn=self._modal_bulk_upload, bulk_download_fn=self._modal_bulk_download)
++                self._sync_manager.sync(force=True)
++                self.init_session()
++            self._last_alive_check = time.monotonic()
++
+     def _before_execute(self) -> None:
++        self._revive_if_dead()
+         self._sync_manager.sync()  # rate-limited internally
+ 
+     def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120, stdin_data: str | None = None):

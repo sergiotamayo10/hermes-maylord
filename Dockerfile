@@ -76,6 +76,14 @@ RUN git clone --depth 1 --branch "${HERMES_REF}" \
         test "$(git -C /opt/hermes/repo rev-parse HEAD)" = \
             d923a5eb487a17c0a68801bba9ef0f56c81040a8; \
     fi
+# Local fixes to Hermes itself. A patch that no longer applies fails the build
+# on purpose, so a Hermes upgrade has to re-check each one.
+#   modal-sandbox-revive: Modal sandboxes live 6h (TERMINAL_MODAL_SANDBOX_LIFETIME)
+#   instead of 1h, and a dead sandbox is replaced instead of failing every command.
+COPY patches/ /app/patches/
+RUN for p in /app/patches/*.patch; do \
+        git -C /opt/hermes/repo apply --check "$p" && git -C /opt/hermes/repo apply "$p" || exit 1; \
+    done
 WORKDIR /opt/hermes/repo
 COPY template_helpers/build_hermes_image.py /app/template_helpers/build_hermes_image.py
 COPY requirements.txt /app/requirements.txt
